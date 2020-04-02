@@ -1,0 +1,166 @@
+#All College and UoA gender, headcount, fte-----------------------------
+
+#Packages----------------------
+
+library(dplyr)
+library(lubridate)
+library(janitor)
+library(openxlsx)
+library(tidyr)
+library(stringr)
+library(tibble)
+
+#Data Import-------------------
+
+accounting <- c("Accounting", "Centre for Finance & Investment XFI", "Management", "Organisation Studies")
+
+uoa_level_3_map <- read.xlsx("//universityofexeteruk.sharepoint.com@SSL/DavWWWRoot/sites/ResPI/analysis/Team Information/Source Data/Mappings/trent_level3_ref_uoa_map.xlsx") %>%
+  mutate(level_3 = str_replace_all(level_3, c("\\(" = "",
+                                              "\\)" = ""))) %>%
+  add_row(level_3 = accounting,
+          mapped_uoa = 17) %>%
+  add_row(level_3 = "Sociology",
+          mapped_uoa = 21) %>%
+  add_row(level_3 = "Radiography",
+          mapped_uoa = 2)
+
+college_map <- read.xlsx("//universityofexeteruk.sharepoint.com@SSL/DavWWWRoot/sites/ResPI/analysis/Team Information/Source Data/Mappings/college_name_variants.xlsx")
+
+mf_lang <- as.data.frame(c("Chinese ML", "French ML", "German ML", "Italian ML", "Russian ML", "Hispanic Studies ML", "Foreign Language Centre")) %>%
+  summarise_all(paste, collapse="|")
+
+manual_uoa <- as.data.frame(read.xlsx("C:/Users/jfw213/OneDrive - University of Exeter/staff_missing_uoa.xlsx")) %>%
+  mutate(manual_uoa = as.character(manual_uoa))
+
+#Snapshots-----------------------
+
+Staff_Snapshot_Dir <- "//universityofexeteruk.sharepoint.com@SSL/DavWWWRoot/sites/ResPI/analysis/Standard reports/Research Monitoring/RM20/Data/Staff/snapshots/"
+
+Staff_Snapshot_12_13 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2013-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2012/13")
+
+Staff_Snapshot_13_14 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2014-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2013/14")
+
+Staff_Snapshot_14_15 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2015-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2014/15")
+
+Staff_Snapshot_15_16 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2016-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2015/16")
+
+Staff_Snapshot_16_17 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2017-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2016/17")
+
+Staff_Snapshot_17_18 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2018-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2017/18")
+
+Staff_Snapshot_18_19 <- read.xlsx(paste0(Staff_Snapshot_Dir, "2019-07-31.xlsx")) %>%
+  clean_names() %>%
+  mutate(Ac_Year = "2018/19")
+
+#Master file--------------------------------
+
+Staff_Snapshot_All <- bind_rows(Staff_Snapshot_12_13,
+                                Staff_Snapshot_13_14,
+                                Staff_Snapshot_14_15,
+                                Staff_Snapshot_15_16,
+                                Staff_Snapshot_16_17,
+                                Staff_Snapshot_17_18,
+                                Staff_Snapshot_18_19) %>%
+  mutate(level_3 = str_replace_all(level_3, c("Cornwall" = "",
+                                              "\\(" = "",
+                                              "\\)" = "",
+                                              "CEDAR" = "Psychology",
+                                              "Human Geography" = "Geography",
+                                              "Strategy & Security Institute" = "Politics",
+                                              "Medical Imaging Radiography" = "Institute of Health Research")),
+         level_3 = str_replace(level_3, regex(mf_lang), "Modern Languages incl AHV"),
+         level_3 = trimws(level_3)) %>%
+  left_join(uoa_level_3_map, by = "level_3") %>%
+  left_join(college_map, by = c("level_2" = "variant")) %>%
+  left_join(manual_uoa, by = c("forename", "surname")) %>%
+  mutate(uoa = coalesce(mapped_uoa, manual_uoa),
+         uoa = str_remove(uoa, "^0+")) %>%
+  filter(!is.na(to_use),
+         !is.na(level_3),
+         to_use != "Non-College",
+         !is.na(uoa)) %>%
+  select(to_use,
+         uoa,
+         per_ref_no,
+         fte,
+         gender,
+         Ac_Year) %>%
+  group_by(Ac_Year,
+           to_use) %>%
+  add_tally(., name = "college_headcount") %>%
+  mutate(college_fte = sum(fte),
+         college_males = length(which(gender == "Male")),
+         college_females = length(which(gender == "Female"))) %>%
+  ungroup() %>%
+  group_by(Ac_Year,
+           to_use,
+           uoa) %>%
+  add_tally(., name = "uoa_headcount") %>%
+    mutate(uoa_fte = sum(fte),
+           uoa_males = length(which(gender == "Male")),
+           uoa_females = length(which(gender == "Female"))) %>%
+  ungroup() %>%
+  select(-per_ref_no,
+         -gender,
+         -fte) %>%
+  unique()
+
+#College---------------------------------------
+
+college_snap <- Staff_Snapshot_All %>%
+  select(Ac_Year,
+          to_use,
+          college_headcount,
+          college_fte,
+          college_males,
+          college_females) %>%
+  unique() %>%
+  group_by(Ac_Year,
+           to_use) %>%
+  mutate(males = as.numeric(paste0(round(college_males/sum(college_females, college_males)*100, 0)))) %>%
+  mutate(females = as.numeric(paste0(round(college_females/sum(college_females, college_males)*100, 0)))) %>%
+  ungroup() %>%
+  select(-college_females,
+         -college_males) %>%
+  pivot_longer(.,
+               3:6,
+               names_to = "Variable",
+               values_to = "value") %>%
+  pivot_wider(names_from = Ac_Year,
+              values_from = value)
+
+#UoA-------------------------------------------
+
+uoa_snap <- Staff_Snapshot_All %>%
+  select(Ac_Year,
+         uoa,
+         uoa_headcount,
+         uoa_fte,
+         uoa_males,
+         uoa_females) %>%
+  unique() %>%
+  group_by(Ac_Year,
+           uoa) %>%
+  mutate(males = as.numeric(paste0(round(uoa_males/sum(uoa_females, uoa_males)*100, 0)))) %>%
+  mutate(females = as.numeric(paste0(round(uoa_females/sum(uoa_females, uoa_males)*100, 0)))) %>%
+  ungroup() %>%
+  select(-uoa_females,
+         -uoa_males) %>%
+  pivot_longer(.,
+               3:6,
+               names_to = "Variable",
+               values_to = "value") %>%
+  pivot_wider(names_from = Ac_Year,
+              values_from = value)
